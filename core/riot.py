@@ -89,11 +89,25 @@ class RiotClient:
     async def get_league_entries(self, puuid: str) -> list[dict]:
         return await self._get(f"{PLATFORM}/lol/league/v4/entries/by-puuid/{puuid}")
 
-    async def get_match_ids(self, puuid: str, *, count: int = 20, start: int = 0) -> list[str]:
+    async def get_match_ids(self, puuid: str, *, count: int = 20,
+                            start: int = 0, queue: int | None = None) -> list[str]:
+        params = {"start": start, "count": count}
+        if queue:
+            params["queue"] = queue
         return await self._get(
-            f"{REGIONAL}/lol/match/v5/matches/by-puuid/{puuid}/ids",
-            params={"start": start, "count": count},
-        )
+            f"{REGIONAL}/lol/match/v5/matches/by-puuid/{puuid}/ids", params=params)
 
     async def get_match(self, match_id: str) -> dict:
         return await self._get(f"{REGIONAL}/lol/match/v5/matches/{match_id}")
+
+    async def get_league_page(self, tier: str, division: str, page: int = 1) -> list:
+        return await self._get(
+            f"{PLATFORM}/lol/league/v4/entries/RANKED_SOLO_5x5/{tier}/{division}",
+            params={"page": page})
+
+    async def get_apex_league(self, tier: str) -> dict:
+        path = {"MASTER": "masterleagues",
+                "GRANDMASTER": "grandmasterleagues",
+                "CHALLENGER": "challengerleagues"}[tier]
+        return await self._get(
+            f"{PLATFORM}/lol/league/v4/{path}/by-queue/RANKED_SOLO_5x5")

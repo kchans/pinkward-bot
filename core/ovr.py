@@ -123,12 +123,22 @@ def compute(base: float, rows) -> tuple[dict[str, int], dict[str, int]]:
     return out, games
 
 
-async def refresh_ovr(puuid: str) -> tuple[dict[str, int], dict[str, int], str]:
+async def refresh_ovr(puuid: str,
+                      perf: float | None = None) -> tuple[dict[str, int], dict[str, int], str]:
+    if perf is None:
+        from core.stats import player_profile      # 순환 임포트 방지
+        p = await player_profile(puuid)
+        if p:
+            perf = sum(p["stats"].values()) / len(p["stats"])
+
     async with pool().acquire() as conn:
         rank_rows = await conn.fetch(TIER_SQL, puuid)
         stat_rows = await conn.fetch(STATS_SQL, puuid, SAMPLE, STAT_QUEUES)
 
     base, source = base_from_ranks(rank_rows)
+    if perf is not None:
+        base = perf if source == "언랭" else 0.5 * base + 0.5 * perf
+
     ratings, games = compute(base, stat_rows)
 
     async with pool().acquire() as conn:
@@ -142,3 +152,15 @@ async def refresh_ovr(puuid: str) -> tuple[dict[str, int], dict[str, int], str]:
                     puuid, pos, ovr, games.get(pos, 0),
                 )
     return ratings, games, source
+
+async def overall_ovr(puuid: str, perf: float | None = None) -> tuple[int, str]:
+    """카드에 표시할 종합 지수. 포지션 보정을 적용하지 않는다."""
+    async with pool().acquire() as conn:
+        rank_rows = await conn.fetch(TIER_SQL, puuid)
+
+    base, source = base_from_ranks(rank_rows)
+    if perf is not None:
+        base = perf if source == "언랭" else 0.5 * base + 0.5 * perf
+    return int(round(max(30, min(99, base)))), source
+
+    

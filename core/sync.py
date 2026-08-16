@@ -61,7 +61,7 @@ async def sync_rank(riot: RiotClient, puuid: str) -> None:
                 puuid)
 
 
-async def _save_match(data: dict) -> None:
+async def _save_match(data: dict, store_raw: bool = True) -> None:
     info = data["info"]
     match_id = data["metadata"]["matchId"]
     started = datetime.fromtimestamp(
@@ -76,7 +76,8 @@ async def _save_match(data: dict) -> None:
                 "values ($1, 'riot', $2, $3, $4, $5, $6::jsonb) "
                 "on conflict (match_id) do nothing",
                 match_id, info.get("queueId"), info.get("gameMode"),
-                started, info.get("gameDuration"), json.dumps(data),
+                started, info.get("gameDuration"),
+                json.dumps(data) if store_raw else None,
             )
             for p in info["participants"]:
                 pos = p.get("teamPosition") or p.get("individualPosition")
