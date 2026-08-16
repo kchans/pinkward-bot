@@ -167,3 +167,113 @@ def _compose(data: dict, art: Image.Image | None) -> io.BytesIO:
 async def render_profile_card(data: dict) -> io.BytesIO:
     art = await _fetch_art(data.get("champion"))
     return await asyncio.to_thread(_compose, data, art)
+
+
+ICON_ASSET_DIR = Path("assets/icons")
+
+
+DW, DH = 1200, 745
+BLUE = (91, 157, 217)
+RED = (217, 83, 79)
+DBG = (10, 14, 18)
+BLUE_PANEL = (16, 26, 38)
+RED_PANEL = (28, 16, 18)
+LANE_TEXT = (107, 127, 148)
+
+POS_FILE = {"TOP": "top", "JUNGLE": "jungle", "MIDDLE": "middle",
+            "BOTTOM": "bottom", "UTILITY": "utility"}
+
+
+def _load_asset(name: str, size: int) -> Image.Image | None:
+    path = ICON_ASSET_DIR / name
+    if not path.exists():
+        return None
+    return Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
+
+
+
+def _rounded(img: Image.Image, radius: int) -> Image.Image:
+    mask = Image.new("L", img.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [0, 0, img.width - 1, img.height - 1], radius, fill=255)
+    out = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    out.paste(img, (0, 0), mask)
+    return out
+
+
+def _compose_draft(data: dict) -> io.BytesIO:
+    card = Image.new("RGB", (DW, DH), DBG)
+    d = ImageDraw.Draw(card, "RGBA")
+
+    f_head = _font("Pretendard-Bold.otf", 30)
+    f_name = _font("Pretendard-Bold.otf", 28)
+    f_ovr = _font("Pretendard-Bold.otf", 32)
+    f_total = _font("Pretendard-Bold.otf", 34)
+    f_small = _font("Pretendard-SemiBold.otf", 22)
+    f_tiny = _font("Pretendard-SemiBold.otf", 19)
+
+    d.text((32, 34), f"내전 {data['set_no']}세트 · 전력 차 {data['diff']}",
+           font=f_head, fill=(143, 163, 184))
+    d.text((DW - 32, 40), "핑크와드봇", font=f_tiny, fill=(78, 92, 108), anchor="ra")
+
+    # 전력 막대
+    bt, rt = data["blue_total"], data["red_total"]
+    total = max(bt + rt, 1)
+    bar_x, bar_w, bar_y = 190, DW - 380, 104
+    d.text((32, bar_y - 12), "블루", font=f_small, fill=BLUE)
+    d.text((96, bar_y - 16), str(bt), font=f_total, fill=(232, 238, 244))
+    d.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 10], 5, fill=(27, 36, 48))
+    split = int(bar_w * bt / total)
+    d.rounded_rectangle([bar_x, bar_y, bar_x + split, bar_y + 10], 5, fill=BLUE)
+    d.rounded_rectangle([bar_x + split, bar_y, bar_x + bar_w, bar_y + 10], 5, fill=RED)
+    d.text((DW - 32, bar_y - 12), "레드", font=f_small, fill=RED, anchor="ra")
+    d.text((DW - 96, bar_y - 16), str(rt), font=f_total,
+           fill=(232, 238, 244), anchor="ra")
+
+    row_h, gap, top = 96, 12, 168
+    for i, row in enumerate(data["rows"]):
+        y = top + i * (row_h + gap)
+        cy = y + row_h // 2
+
+        for side, panel_x0, panel_x1, accent, panel_bg in (
+                ("blue", 96, 548, BLUE, BLUE_PANEL),
+                ("red", 652, 1104, RED, RED_PANEL)):
+            p = row[side]
+            d.rounded_rectangle([panel_x0, y, panel_x1, y + row_h], 12, fill=panel_bg)
+            edge = panel_x1 - 4 if side == "blue" else panel_x0
+            d.rounded_rectangle([edge, y + 8, edge + 4, y + row_h - 8], 2, fill=accent)
+
+
+            ovr_x = panel_x1 - 28 if side == "blue" else panel_x0 + 28
+            d.text((ovr_x, cy), str(p["ovr"]), font=f_ovr, fill=accent,
+                   anchor="rm" if side == "blue" else "lm")
+
+            name = p["name"]
+            if len(name) > 16:
+                name = name[:15] + "…"
+            name_x = panel_x1 - 100 if side == "blue" else panel_x0 + 100
+            d.text((name_x, cy - 2), name, font=f_name, fill=(232, 238, 244),
+                   anchor="rm" if side == "blue" else "lm")
+            if p.get("lock"):
+                d.text((name_x, cy + 26), "고정", font=f_tiny, fill=(143, 163, 184),
+                       anchor="rm" if side == "blue" else "lm")
+
+            crest = _load_asset(f"tier-{p['tier']}.png", 56) if p.get("tier") else None
+            crest_x = 26 if side == "blue" else DW - 82
+            if crest:
+                card.paste(crest, (crest_x, cy - 28), crest)
+
+        lane = _load_asset(f"position-{POS_FILE[row['position']]}.png", 46)
+        if lane:
+            card.paste(lane, (DW // 2 - 23, cy - 32), lane)
+        d.text((DW // 2, cy + 30), row["lane_ko"], font=f_tiny,
+               fill=LANE_TEXT, anchor="mm")
+
+    buf = io.BytesIO()
+    card.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+async def render_draft_card(data: dict) -> io.BytesIO:
+    return await asyncio.to_thread(_compose_draft, data)

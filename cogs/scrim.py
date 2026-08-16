@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+from core.card import render_draft_card
 
 from core.balance import balance_all
 from core.db import pool
@@ -20,6 +21,13 @@ join summoners s      on s.puuid  = sp.puuid
 left join position_ratings pr on pr.puuid = sp.puuid
 where sp.scrim_id = $1
 order by sp.joined_at
+"""
+
+TIERS_SQL = """
+select distinct on (puuid) puuid, lower(tier) as tier
+from rank_snapshots
+where puuid = any($1::text[]) and queue_type = 'RANKED_SOLO_5x5'
+order by puuid, fetched_at desc
 """
 
 CANDIDATES_SQL = """
@@ -194,6 +202,36 @@ def team_embed(players, cand, index: int, total: int) -> discord.Embed:
         embed.add_field(name=f"{name}  (전력 {ovr_sum})", value=body, inline=False)
     embed.set_footer(text=f"전력 차 {diff}점 · 후보 {index + 1}/{total}")
     return embed
+
+
+def short_name(p: dict) -> str:
+    if p["is_virtual"] and p["display_name"]:
+        return p["display_name"]
+    return p["game_name"]
+
+
+async def build_draft_data(players, cand, set_no: int) -> dict:
+    diff, (a_idx, a_pos, a_sum), (b_idx, b_pos, b_sum) = cand
+    puuids = [p["puuid"] for p in players]
+
+    async with pool().acquire() as conn:
+        tiers = {r["puuid"]: r["tier"]
+                 for r in await conn.fetch(TIERS_SQL, puuids)}
+
+    blue = {a_pos[k]: players[i] for k, i in enumerate(a_idx)}
+    red = {b_pos[k]: players[i] for k, i in enumerate(b_idx)}
+
+    def cell(p, pos):
+        return {"name": short_name(p), "ovr": p["ovr"][pos],
+                "tier": tiers.get(p["puuid"]), "lock": bool(p["lock"])}
+
+    return {
+        "set_no": set_no, "diff": diff,
+        "blue_total": a_sum, "red_total": b_sum,
+        "rows": [{"position": pos, "lane_ko": POSITION_KO[pos],
+                  "blue": cell(blue[pos], pos), "red": cell(red[pos], pos)}
+                 for pos in POSITIONS],
+    }
 
 
 async def refresh_public(guild: discord.Guild, scrim_id: int) -> None:
@@ -442,7 +480,7 @@ class ResultView(discord.ui.View):
     async def red(self, interaction: discord.Interaction, _b: discord.ui.Button):
         await self._win(interaction, 2, "레드팀")
 
-    @discord.ui.button(label="다시 짜기", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="다시 짜기", style=discord.ButtonStyle.secondary)
     async def reroll(self, interaction: discord.Interaction, _b: discord.ui.Button):
         if not await self._host_only(interaction):
             return
@@ -450,9 +488,13 @@ class ResultView(discord.ui.View):
         self.index = (self.index + 1) % len(self.candidates)
         cand = self.candidates[self.index]
         await save_teams(self.scrim_id, self.players, cand)
+
+        scrim = await get_scrim(self.scrim_id)
+        data = await build_draft_data(self.players, cand,
+                                      scrim["games_played"] + 1)
+        buf = await render_draft_card(data)
         await interaction.edit_original_response(
-            embed=team_embed(self.players, cand, self.index, len(self.candidates)),
-            view=self)
+            attachments=[discord.File(buf, filename="draft.png")], view=self)
 
     @discord.ui.button(label="음성채널 이동", style=discord.ButtonStyle.success, row=1)
     async def move_voice(self, interaction: discord.Interaction, _b: discord.ui.Button):
@@ -603,8 +645,12 @@ class RecruitView(discord.ui.View):
             child.disabled = True
         await interaction.edit_original_response(view=self)
 
+        scrim = await get_scrim(self.scrim_id)
+        data = await build_draft_data(players, candidates[0],
+                                      scrim["games_played"] + 1)
+        buf = await render_draft_card(data)
         await interaction.followup.send(
-            embed=team_embed(players, candidates[0], 0, len(candidates)),
+            file=discord.File(buf, filename="draft.png"),
             view=ResultView(self.scrim_id, self.host_id, interaction.guild_id,
                             players, candidates))
 
