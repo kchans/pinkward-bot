@@ -50,6 +50,7 @@ def panel(title: str,
 
     if actions:
         items.append(discord.ui.Separator())
-        items.append(discord.ui.ActionRow(*actions))
+        for i in range(0, len(actions), 5):
+            items.append(discord.ui.ActionRow(*actions[i:i + 5]))
 
     return Panel(discord.ui.Container(*items, accent_colour=colour))

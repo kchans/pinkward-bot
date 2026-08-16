@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from core.db import pool
+from core.ui import ActionButton, panel
 
 MEMBERS_SQL = """
 select gm.discord_user_id, ss.last_match_sync
@@ -23,21 +24,17 @@ def mentions(ids: list[int], limit: int = MAX_SHOW) -> str:
     return text
 
 
-class CallView(discord.ui.View):
-    def __init__(self, missing: list[int]):
-        super().__init__(timeout=300)
-        self.missing = missing
-
-    @discord.ui.button(label="미등록자 호출", style=discord.ButtonStyle.primary)
-    async def call(self, interaction: discord.Interaction, _b: discord.ui.Button):
+def call_handler(missing: list[int]):
+    async def handler(interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message(
                 "관리자만 사용할 수 있습니다.", ephemeral=True)
             return
         await interaction.response.send_message(
-            f"{mentions(self.missing)}\n"
+            f"{mentions(missing)}\n"
             "아직 롤 계정이 연결되지 않았습니다. "
             "`/등록` 에 `이름#태그` 를 입력해 주세요.")
+    return handler
 
 
 class Status(commands.Cog):
@@ -52,7 +49,7 @@ class Status(commands.Cog):
         guild = interaction.guild
 
         members = [m for m in guild.members if not m.bot]
-        if not members:                       # 캐시가 비어 있으면 직접 조회
+        if not members:
             members = [m async for m in guild.fetch_members(limit=None) if not m.bot]
 
         async with pool().acquire() as conn:
@@ -72,30 +69,28 @@ class Status(commands.Cog):
 
         virtual = len([r for r in rows if r["discord_user_id"] == 0])
 
-        embed = discord.Embed(
-            title=f"{guild.name} 계정 등록 현황",
-            description=(f"서버원 **{len(members)}명** 중 "
-                         f"등록 **{len(done) + len(stale)}명** · "
-                         f"미등록 **{len(missing)}명**"),
-            color=0xE91E63,
-        )
+        sections: list[tuple] = [(
+            "현황",
+            f"서버원 **{len(members)}명** 중 "
+            f"등록 **{len(done) + len(stale)}명** · 미등록 **{len(missing)}명**")]
 
         if missing:
-            embed.add_field(name=f"미등록 · {len(missing)}명",
-                            value=mentions(missing), inline=False)
+            sections.append((f"미등록 · {len(missing)}명", mentions(missing)))
         if stale:
-            embed.add_field(
-                name=f"전적 미수집 · {len(stale)}명",
-                value=mentions(stale) + "\n관리자가 `/전체갱신` 을 실행해 주세요.",
-                inline=False)
+            sections.append((f"전적 미수집 · {len(stale)}명",
+                             mentions(stale) +
+                             "\n관리자가 `/전체갱신` 을 실행해 주세요."))
         if not missing and not stale:
-            embed.add_field(name="상태",
-                            value="전원 등록과 전적 수집이 완료됐습니다.", inline=False)
-        if virtual:
-            embed.set_footer(text=f"테스트 계정 {virtual}개는 집계에서 제외했습니다.")
+            sections.append(("상태", "전원 등록과 전적 수집이 완료됐습니다."))
 
-        view = CallView(missing) if missing else None
-        await interaction.followup.send(embed=embed, view=view)
+        actions = ([ActionButton("미등록자 호출", call_handler(missing),
+                                 discord.ButtonStyle.primary)]
+                   if missing else None)
+        footer = f"테스트 계정 {virtual}개는 집계에서 제외했습니다." if virtual else None
+
+        await interaction.followup.send(
+            view=panel(f"{guild.name} 계정 등록 현황", sections,
+                       footer=footer, actions=actions))
 
 
 async def setup(bot: commands.Bot):

@@ -7,9 +7,9 @@ from core.riot import RiotClient
 
 EXTENSIONS = (
     "cogs.register", "cogs.sync", "cogs.hall_of_fame",
-    "cogs.ovr", "cogs.scrim", "cogs.info", "cogs.status"
+    "cogs.ovr", "cogs.scrim", "cogs.info", "cogs.status",
+    "cogs.scheduler", "cogs.stocks",
 )
-
 
 class PinkWardBot(commands.Bot):
     def __init__(self):

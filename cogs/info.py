@@ -2,6 +2,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from core.ui import panel
+
 BOT_NAME = "핑크와드봇"
 VERSION = "0.1.0"
 
@@ -22,6 +24,12 @@ USER_COMMANDS = [
     ("/명예의전당", "티어 순위와 주간 기록"),
     ("/내전", "내전 모집과 자동 팀 배정"),
     ("/내전순위", "내전 전적 순위"),
+    ("/출석", "하루 한 번 코인 받기"),
+    ("/시세", "종목 시세 보기"),
+    ("/매수", "예약 매수"),
+    ("/매도", "예약 매도"),
+    ("/자산", "보유 종목과 손익"),
+    ("/투자순위", "총자산 순위"),
     ("/정보", "이 안내 보기"),
 ]
 
@@ -42,23 +50,19 @@ class Info(commands.Cog):
 
     @app_commands.command(name="정보", description="봇 사용법과 고지사항을 봅니다.")
     async def info(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title=f"{BOT_NAME} v{VERSION}",
-            description="롤 내전과 서버 랭킹을 돕는 봇입니다.\n"
-                        "먼저 `/등록` 으로 계정을 연결한 뒤 `/갱신` 을 실행하세요.",
-            color=0xE91E63,
-        )
-        embed.add_field(name="명령어", value=_block(USER_COMMANDS), inline=False)
-        embed.add_field(name="관리자 전용", value=_block(ADMIN_COMMANDS), inline=False)
-        embed.add_field(
-            name="밸런싱 지수 안내",
-            value="포지션별 지수는 **내전 팀 배정 전용** 참고값입니다. "
-                  "라이엇 공식 랭크를 대체하거나 매치메이킹 등급을 추정하지 않으며, "
-                  "이 서버 안에서만 유효합니다.",
-            inline=False,
-        )
-        embed.add_field(name="고지", value=LEGAL, inline=False)
-        await interaction.response.send_message(embed=embed)
+        sections = [
+            ("", "롤 내전과 서버 랭킹을 돕는 봇입니다.\n"
+                 "먼저 `/등록` 으로 계정을 연결한 뒤 `/갱신` 을 실행하세요."),
+            ("명령어", _block(USER_COMMANDS)),
+            ("관리자 전용", _block(ADMIN_COMMANDS)),
+            ("실력 지수 안내",
+             "포지션별 지수는 **내전 팀 배정 전용** 참고값입니다. "
+             "라이엇 공식 랭크를 대체하거나 매치메이킹 등급을 추정하지 않으며, "
+             "이 서버 안에서만 유효합니다."),
+            ("고지", LEGAL),
+        ]
+        await interaction.response.send_message(
+            view=panel(f"{BOT_NAME} v{VERSION}", sections))
 
 
 async def setup(bot: commands.Bot):

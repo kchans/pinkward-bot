@@ -1,14 +1,14 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from core.ovr import POSITIONS, POSITION_KO, overall_ovr, refresh_ovr
 
 from core.card import render_profile_card
 from core.champions import korean_name
 from core.db import pool
-from core.ovr import POSITIONS, POSITION_KO, refresh_ovr
+from core.ovr import POSITIONS, POSITION_KO, overall_ovr, refresh_ovr
 from core.stats import MIN_GAMES, player_profile
 from core.tier import tier_label
+from core.ui import ActionButton, panel
 
 BY_DISCORD_SQL = """
 select s.puuid, s.game_name, s.tag_line
@@ -41,6 +41,8 @@ POSITION_CHOICES = [
 class Ovr(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    # ---------- 카드 ----------
 
     @app_commands.command(name="오버롤", description="내 카드를 봅니다.")
     @app_commands.rename(user="유저", riot_id="라이엇id")
@@ -76,8 +78,8 @@ class Ovr(commands.Cog):
             return
 
         perf = sum(p["stats"].values()) / len(p["stats"])
-        await refresh_ovr(row["puuid"], perf=perf)      # 밸런싱용 지수 갱신
-        ovr, _ = await overall_ovr(row["puuid"], perf=perf)
+        await refresh_ovr(row["puuid"], perf=perf)          # 밸런싱용 지수 갱신
+        ovr, _ = await overall_ovr(row["puuid"], perf=perf)  # 카드에 쓸 종합 지수
         main = p["main_position"]
 
         async with pool().acquire() as conn:
@@ -96,13 +98,69 @@ class Ovr(commands.Cog):
             "position": POSITION_KO[main],
             "ovr": ovr,
             "badge": champ_ko,
-            "sub": f"최다 픽 {p['champion_picks']}판 · {POSITION_KO[main]} {p['raw']['games']}판",
+            "sub": f"최다 픽 {p['champion_picks']}판 · "
+                   f"{POSITION_KO[main]} {p['raw']['games']}판",
             "stats": p["stats"],
             "champion": p["champion"],
         })
 
         await interaction.followup.send(
             file=discord.File(buf, filename="card.png"))
+
+    # ---------- 포지션 순위 ----------
+
+    def _switch(self, position: str):
+        async def handler(interaction: discord.Interaction):
+            view = await self._position_panel(interaction.guild, position)
+            if view is None:
+                await interaction.response.send_message(
+                    "지수 데이터가 없습니다.", ephemeral=True)
+                return
+            await interaction.response.edit_message(view=view)
+        return handler
+
+    async def _position_panel(self, guild: discord.Guild, position: str):
+        async with pool().acquire() as conn:
+            rows = await conn.fetch(ALL_RATINGS_SQL, guild.id)
+        if not rows:
+            return None
+
+        by_player: dict[str, dict] = {}
+        for r in rows:
+            by_player.setdefault(r["puuid"], {})[r["position"]] = r
+
+        entries = []
+        for rows_by_pos in by_player.values():
+            row = rows_by_pos.get(position)
+            if row is None:
+                continue
+            main_pos = max(rows_by_pos, key=lambda p: rows_by_pos[p]["games"])
+            entries.append((row, main_pos == position and row["games"] > 0))
+
+        if not entries:
+            body = "이 포지션의 데이터가 없습니다."
+        else:
+            entries.sort(key=lambda e: e[0]["ovr"], reverse=True)
+            lines = []
+            for i, (r, is_main) in enumerate(entries[:20], 1):
+                name = (f"**{r['display_name'] or r['game_name']}**"
+                        if r["is_virtual"] else f"<@{r['discord_user_id']}>")
+                mark = " `주`" if is_main else ""
+                lines.append(
+                    f"`{i:>2}.` {name} — **{r['ovr']}** ({r['games']}판){mark}")
+            body = "\n".join(lines)
+
+        buttons = [
+            ActionButton(
+                POSITION_KO[p], self._switch(p),
+                discord.ButtonStyle.primary if p == position
+                else discord.ButtonStyle.secondary)
+            for p in POSITIONS]
+
+        return panel(f"{guild.name} · {POSITION_KO[position]} 순위",
+                     [("", body)],
+                     footer="`주` 표시는 해당 포지션이 주 라인인 사람",
+                     actions=buttons)
 
     @app_commands.command(name="포지션순위",
                           description="특정 포지션의 서버 순위를 봅니다.")
@@ -112,45 +170,12 @@ class Ovr(commands.Cog):
     async def position_ranking(self, interaction: discord.Interaction,
                                position: app_commands.Choice[str]):
         await interaction.response.defer(thinking=True)
-
-        async with pool().acquire() as conn:
-            rows = await conn.fetch(ALL_RATINGS_SQL, interaction.guild_id)
-
-        if not rows:
+        view = await self._position_panel(interaction.guild, position.value)
+        if view is None:
             await interaction.followup.send(
                 "지수 데이터가 없습니다. `/전체갱신` 을 먼저 실행하세요.")
             return
-
-        by_player: dict[str, dict] = {}
-        for r in rows:
-            by_player.setdefault(r["puuid"], {})[r["position"]] = r
-
-        target = position.value
-        entries = []
-        for rows_by_pos in by_player.values():
-            row = rows_by_pos.get(target)
-            if row is None:
-                continue
-            main_pos = max(rows_by_pos, key=lambda pos: rows_by_pos[pos]["games"])
-            entries.append((row, main_pos == target and row["games"] > 0))
-
-        if not entries:
-            await interaction.followup.send("해당 포지션의 데이터가 없습니다.")
-            return
-
-        entries.sort(key=lambda e: e[0]["ovr"], reverse=True)
-        lines = []
-        for i, (r, is_main) in enumerate(entries[:20], 1):
-            name = (f"**{r['display_name'] or r['game_name']}**"
-                    if r["is_virtual"] else f"<@{r['discord_user_id']}>")
-            mark = " `주`" if is_main else ""
-            lines.append(f"`{i:>2}.` {name} — **{r['ovr']}** ({r['games']}판){mark}")
-
-        embed = discord.Embed(
-            title=f"{interaction.guild.name} · {position.name} 순위",
-            description="\n".join(lines), color=0xE91E63)
-        embed.set_footer(text="`주` 표시는 해당 포지션이 주 라인인 사람")
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(view=view)
 
 
 async def setup(bot: commands.Bot):

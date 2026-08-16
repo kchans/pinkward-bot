@@ -44,15 +44,13 @@ class RateLimiter:
 class RiotClient:
     def __init__(self):
         self._session: aiohttp.ClientSession | None = None
-        # 개발용 키 기준: 20회/1초, 100회/2분
-        self._limiter = RateLimiter([(20, 1.0), (100, 120.0)])
+        self._limiter = RateLimiter([(18, 1.0), (95, 120.0)])
+        self.key = RIOT_API_KEY          # 실행 중 교체 가능
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                headers={"X-Riot-Token": RIOT_API_KEY},
-                timeout=aiohttp.ClientTimeout(total=15),
-            )
+                timeout=aiohttp.ClientTimeout(total=15))
         return self._session
 
     async def close(self) -> None:
@@ -61,9 +59,10 @@ class RiotClient:
 
     async def _get(self, url: str, *, params=None, retries: int = 3):
         session = await self._ensure_session()
+        headers = {"X-Riot-Token": self.key}
         for attempt in range(retries):
             await self._limiter.acquire()
-            async with session.get(url, params=params) as resp:
+            async with session.get(url, params=params, headers=headers) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 if resp.status == 429:
@@ -80,7 +79,8 @@ class RiotClient:
     # ---- 공개 메서드 ----
 
     async def get_account(self, game_name: str, tag_line: str) -> dict:
-        url = f"{REGIONAL}/riot/account/v1/accounts/by-riot-id/{quote(game_name)}/{quote(tag_line)}"
+        url = (f"{REGIONAL}/riot/account/v1/accounts/by-riot-id/"
+               f"{quote(game_name)}/{quote(tag_line)}")
         return await self._get(url)
 
     async def get_summoner(self, puuid: str) -> dict:
